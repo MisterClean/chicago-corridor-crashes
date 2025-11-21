@@ -38,3 +38,6 @@ rsconnect/
 
 # Mac OS
 .DS_Store
+
+# Large data files
+data/raw/people/

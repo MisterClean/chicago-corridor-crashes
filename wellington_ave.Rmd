@@ -1,9 +1,13 @@
 ---
-title: "Wellington Avenue Corridor Crash Analysis"
+title: "Wellington Greenway: Safety & Demographics Analysis"
+subtitle: "Clybourn Ave to Lake Shore Drive Corridor Study"
 output:
   html_document:
     output_dir: docs
     output_file: wellington_crashes.html
+    toc: true
+    toc_float: true
+    toc_depth: 3
 editor_options:
   markdown:
     wrap: 72
@@ -11,6 +15,13 @@ editor_options:
 
 ```{r setup, include=FALSE, results='hide'}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+# Load ggplot2 for theme settings
+library(ggplot2)
+
+# Set visualization themes
+theme_set(theme_minimal())
+custom_colors <- c("#4B0082", "#9370DB", "#e74c3c", "#3498db")
 ```
 
 ```{r load-data, message=FALSE, warning=FALSE, results='hide'}
@@ -35,31 +46,23 @@ CHICAGO_BBOX <- c(-87.9401, 41.6445, -87.5239, 42.0230)
 BUFFER_DISTANCE_M <- 45.72
 
 # Query OSM for Wellington Ave
-# Wellington runs from approximately Clybourn Ave (-87.663) to the lakefront (-87.638)
+# Wellington runs from Clybourn Ave on the west to N Lake Shore Dr on the east
 wellington_query <- opq(bbox = CHICAGO_BBOX) %>%
   add_osm_feature(key = 'name', value = 'West Wellington Avenue', value_exact = FALSE) %>%
   osmdata_sf()
 
-wellington_west <- wellington_query$osm_lines
+wellington_streets <- wellington_query$osm_lines %>%
+  select(name, geometry) %>%
+  mutate(name = "Wellington Avenue")
 
-# Query for East Wellington Avenue
-wellington_east_query <- opq(bbox = CHICAGO_BBOX) %>%
-  add_osm_feature(key = 'name', value = 'East Wellington Avenue', value_exact = FALSE) %>%
-  osmdata_sf()
-
-wellington_east <- wellington_east_query$osm_lines
-
-# Extract geometry and combine
-west_geom <- sf::st_geometry(wellington_west)
-east_geom <- sf::st_geometry(wellington_east)
-
-# Combine the geometry into a single sf object
-combined_geom <- c(west_geom, east_geom)
-wellington_streets <- sf::st_sf(
-  name = rep("Wellington Avenue", length(combined_geom)),
-  geometry = combined_geom,
-  crs = sf::st_crs(wellington_west)
-)
+# Clip wellington streets at western boundary (coordinates provided by user)
+# West boundary: 41.935885, -87.683119 (near Clybourn Ave)
+WEST_BOUNDARY_LON <- -87.683119
+wellington_streets <- st_crop(wellington_streets,
+                               xmin = WEST_BOUNDARY_LON,
+                               ymin = -Inf,
+                               xmax = Inf,
+                               ymax = Inf)
 
 # Transform to EPSG 3857 for accurate distance calculations
 wellington_streets <- sf::st_transform(wellington_streets, 3857)
@@ -76,15 +79,81 @@ wellington_crashes <- crashes_sf[apply(intersects, 1, any), ] %>%
     total_injuries = INJURIES_TOTAL,
     incap_injuries = INJURIES_INCAPACITATING
   )
+
+# Load people-level data for demographic analysis
+people_file <- "data/raw/people/people.csv"
+
+if(file.exists(people_file)) {
+  # Optimized reading: specify columns and types for 463MB file
+  people_raw <- read_csv(
+    people_file,
+    col_types = cols(
+      CRASH_RECORD_ID = col_character(),
+      PERSON_ID = col_character(),
+      PERSON_TYPE = col_character(),
+      AGE = col_double(),
+      SEX = col_character(),
+      INJURY_CLASSIFICATION = col_character(),
+      .default = col_skip()  # Skip all other columns
+    )
+  )
+
+  # Join people data with wellington crashes
+  wellington_people <- wellington_crashes %>%
+    st_drop_geometry() %>%
+    inner_join(people_raw, by = "CRASH_RECORD_ID") %>%
+    mutate(
+      # Clean AGE: remove invalid values (negative or > 120)
+      AGE = ifelse(!is.na(AGE) & AGE >= 0 & AGE <= 120, AGE, NA),
+      # Standardize SEX values
+      SEX = case_when(
+        SEX %in% c("M", "F") ~ SEX,
+        TRUE ~ "X"  # Unknown/Not reported
+      ),
+      # Create Age Cohorts
+      age_cohort = case_when(
+        is.na(AGE) ~ "Unknown",
+        AGE <= 18 ~ "Child (0-18)",
+        AGE > 18 & AGE <= 29 ~ "Young Adult (19-29)",
+        AGE > 29 & AGE <= 45 ~ "Adult (30-45)",
+        AGE > 45 & AGE <= 65 ~ "Middle Age (46-65)",
+        AGE > 65 ~ "Senior (65+)",
+        TRUE ~ "Unknown"
+      ),
+      # Simplify Person Type
+      simple_type = case_when(
+        grepl("DRIVER", PERSON_TYPE) ~ "Driver",
+        grepl("PASSENGER", PERSON_TYPE) ~ "Passenger",
+        grepl("PEDESTRIAN", PERSON_TYPE) ~ "Pedestrian",
+        grepl("BICYCLE", PERSON_TYPE) ~ "Cyclist",
+        TRUE ~ "Other"
+      ),
+      # Hour of day
+      crash_hour = hour(CRASH_DATE)
+    )
+} else {
+  warning("People data file not found. Demographic analysis will be skipped.")
+  wellington_people <- NULL
+}
 ```
 
-## About
+## Project Context
 
-Data for this analysis is sourced from the [Traffic Crashes](https://data.cityofchicago.org/Transportation/Traffic-Crashes-Crashes/85ca-t3if/about_data) dataset from the Chicago City Data Portal.
+The Chicago Department of Transportation (CDOT) is proposing a **Neighborhood Greenway** on Wellington Avenue, connecting the Leavitt Greenway to the Lakefront Trail. This infrastructure is designed to be a "family-friendly" route, providing critical access to Hamlin Park, Nettelhorst School, and the Wellington CTA station.
 
-## Study Area Definition
+**Key proposed features include:**
 
-This analysis examines crashes within 150 feet of Wellington Avenue between Clybourn Avenue and the lakefront. Here's a visualization of the study area:
+- **Advisory Bike Lanes** to encourage safer passing
+- **Contraflow Lanes** to allow legal two-way cycling on one-way streets
+- **Lowered Speed Limits** (20 mph) to improve safety for all road users
+
+This analysis examines crash history specifically within the project boundaries: **Clybourn Avenue (West) to N Lake Shore Drive (East)**.
+
+Data for this analysis is sourced from the [Traffic Crashes](https://data.cityofchicago.org/Transportation/Traffic-Crashes-Crashes/85ca-t3if/about_data) and [Traffic Crashes - People](https://data.cityofchicago.org/Transportation/Traffic-Crashes-People/u6pd-qa9d) datasets from the Chicago City Data Portal.
+
+## Study Area Map
+
+The map below highlights the specific corridor analyzed (purple line) and the 150ft buffer zone used to capture crashes impacting the street:
 
 ```{r buffer-visualization, fig.width=10, fig.height=6}
 # Transform to WGS84 for visualization
@@ -113,99 +182,175 @@ buffer_map <- leaflet() %>%
 buffer_map
 ```
 
-## Summary Statistics
+## Demographics: Who is Involved?
+
+Understanding the age of people involved in crashes helps assess the need for "family-friendly" infrastructure.
+
+### Age Distribution of People Involved in Crashes
+
+The chart below shows the age groups of all individuals involved in crashes on this corridor (drivers, passengers, cyclists, and pedestrians).
+
+```{r demographics-age, fig.width=10, fig.height=6}
+if(!is.null(wellington_people)) {
+  age_stats <- wellington_people %>%
+    filter(age_cohort != "Unknown") %>%
+    count(age_cohort, simple_type)
+
+  ggplot(age_stats, aes(x = age_cohort, y = n, fill = simple_type)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("Driver"="#95a5a6", "Passenger"="#34495e",
+                                  "Cyclist"="#e74c3c", "Pedestrian"="#3498db",
+                                  "Other"="#bdc3c7")) +
+    labs(
+      title = "Age Distribution of People Involved in Crashes",
+      subtitle = "Wellington Ave (Clybourn to Lake Shore Drive)",
+      x = "Age Group",
+      y = "Number of People",
+      fill = "Person Type"
+    ) +
+    theme(legend.position = "bottom")
+}
+```
+
+### Focus on Children (Ages 0-18)
+
+```{r demographics-children}
+if(!is.null(wellington_people)) {
+  child_crashes <- wellington_people %>% filter(age_cohort == "Child (0-18)")
+  child_count <- nrow(child_crashes)
+  child_ped_bike <- child_crashes %>%
+    filter(simple_type %in% c("Pedestrian", "Cyclist")) %>%
+    nrow()
+
+  cat(paste0("There have been **", child_count,
+             " children** (under 18) involved in crashes on this corridor since 2019. ",
+             "Of those, **", child_ped_bike, " were walking or biking**."))
+}
+```
+
+## Temporal Analysis: When Do Crashes Happen?
+
+Analyzing crash times helps us understand if students are at risk during school commute hours.
+
+### All Crashes by Hour of Day
+
+Crashes generally peak during the evening rush hour, but a consistent baseline exists throughout the day.
+
+```{r temporal-all-crashes, fig.width=12, fig.height=6}
+time_stats <- wellington_crashes %>%
+  st_drop_geometry() %>%
+  mutate(hour = hour(CRASH_DATE)) %>%
+  count(hour)
+
+ggplot(time_stats, aes(x = hour, y = n)) +
+  geom_line(color = "#2c3e50", size = 1) +
+  geom_area(fill = "#2c3e50", alpha = 0.1) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Total Crash Frequency by Hour of Day",
+    x = "Hour (24h)",
+    y = "Number of Crashes"
+  )
+```
+
+### Children Involved in Crashes by Hour
+
+The chart below isolates crashes involving children (ages 0-18). Note the spikes that align with school commute times.
+
+```{r temporal-children, fig.width=12, fig.height=6}
+if(!is.null(wellington_people)) {
+  # Filter specifically for kids
+  child_time_stats <- wellington_people %>%
+    filter(age_cohort == "Child (0-18)") %>%
+    count(crash_hour, simple_type)
+
+  # Define school hours for highlighting
+  school_morning <- data.frame(xmin=7, xmax=9, ymin=0, ymax=Inf)
+  school_afternoon <- data.frame(xmin=14, xmax=16, ymin=0, ymax=Inf)
+
+  ggplot() +
+    # Highlight school commute times
+    geom_rect(data=school_morning, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
+              fill="#f1c40f", alpha=0.2) +
+    geom_rect(data=school_afternoon, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
+              fill="#f1c40f", alpha=0.2) +
+    # Bar chart of incidents
+    geom_bar(data = child_time_stats, aes(x = crash_hour, y = n, fill = simple_type),
+             stat="identity") +
+    scale_fill_manual(values = c("Driver"="#95a5a6", "Passenger"="#34495e",
+                                  "Cyclist"="#e74c3c", "Pedestrian"="#3498db",
+                                  "Other"="#bdc3c7")) +
+    scale_x_continuous(breaks = 0:23) +
+    labs(
+      title = "Children Involved in Crashes by Hour",
+      subtitle = "Yellow highlights indicate typical school commute times (7-9am, 2-4pm)",
+      x = "Hour of Day",
+      y = "Number of Children Involved",
+      fill = "Mode of Transport"
+    ) +
+    annotate("text", x = 8, y = max(child_time_stats$n) * 1.1,
+             label = "Morning\nCommute", size = 3) +
+    annotate("text", x = 15, y = max(child_time_stats$n) * 1.1,
+             label = "School\nDismissal", size = 3) +
+    theme(legend.position = "bottom")
+}
+```
+
+## General Safety Summary
 
 ```{r crash-stats}
 # Calculate overall statistics
 total_crashes <- nrow(wellington_crashes)
 total_injuries <- sum(wellington_crashes$INJURIES_TOTAL, na.rm = TRUE)
-total_incap_injuries <- sum(wellington_crashes$INJURIES_INCAPACITATING, na.rm = TRUE)
-crashes_with_injury <- sum(wellington_crashes$INJURIES_TOTAL > 0, na.rm = TRUE)
 
-# Fatalities (from INJURIES_FATAL column if available, otherwise estimate from incapacitating)
-total_fatalities <- sum(wellington_crashes$INJURIES_FATAL, na.rm = TRUE)
-
-# Cyclist statistics
+# Create cyclist and pedestrian crash datasets for later use
 cyclist_crashes <- wellington_crashes %>%
   filter(grepl("PEDALCYCLIST|BICYCL", FIRST_CRASH_TYPE, ignore.case = TRUE))
 
-cyclist_stats <- list(
-  crashes = nrow(cyclist_crashes),
-  injuries = sum(cyclist_crashes$INJURIES_TOTAL, na.rm = TRUE),
-  incap_injuries = sum(cyclist_crashes$INJURIES_INCAPACITATING, na.rm = TRUE),
-  fatalities = sum(cyclist_crashes$INJURIES_FATAL, na.rm = TRUE)
-)
-
-# Check for dooring incidents
-cyclist_crashes <- cyclist_crashes %>%
-  mutate(
-    is_dooring = grepl("DOOR|DOORED", CRASH_TYPE, ignore.case = TRUE) |
-                 grepl("DOOR|DOORED", FIRST_CRASH_TYPE, ignore.case = TRUE)
-  )
-dooring_count <- sum(cyclist_crashes$is_dooring, na.rm = TRUE)
-
-# Pedestrian statistics
 pedestrian_crashes <- wellington_crashes %>%
   filter(grepl("PEDESTRIAN", FIRST_CRASH_TYPE, ignore.case = TRUE))
 
-pedestrian_stats <- list(
-  crashes = nrow(pedestrian_crashes),
-  injuries = sum(pedestrian_crashes$INJURIES_TOTAL, na.rm = TRUE),
-  incap_injuries = sum(pedestrian_crashes$INJURIES_INCAPACITATING, na.rm = TRUE),
-  fatalities = sum(pedestrian_crashes$INJURIES_FATAL, na.rm = TRUE)
-)
+# Counts for summary
+ped_crashes <- nrow(pedestrian_crashes)
+bike_crashes <- nrow(cyclist_crashes)
+```
 
-# Create summary table
-summary_data <- tibble(
-  Category = c(
-    "Total Crashes",
-    "Crashes with Injury",
-    "Total Injuries",
-    "Incapacitating Injuries",
-    "Fatalities",
-    "",
-    "Cyclist Crashes",
-    "Cyclists Injured",
-    "Cyclists Incapacitated",
-    "Cyclists Killed",
-    "Dooring Incidents",
-    "",
-    "Pedestrian Crashes",
-    "Pedestrians Injured",
-    "Pedestrians Incapacitated",
-    "Pedestrians Killed"
-  ),
-  Count = c(
-    formatC(total_crashes, big.mark = ",", format = "f", digits = 0),
-    formatC(crashes_with_injury, big.mark = ",", format = "f", digits = 0),
-    formatC(total_injuries, big.mark = ",", format = "f", digits = 0),
-    formatC(total_incap_injuries, big.mark = ",", format = "f", digits = 0),
-    formatC(total_fatalities, big.mark = ",", format = "f", digits = 0),
-    "",
-    formatC(cyclist_stats$crashes, big.mark = ",", format = "f", digits = 0),
-    formatC(cyclist_stats$injuries, big.mark = ",", format = "f", digits = 0),
-    formatC(cyclist_stats$incap_injuries, big.mark = ",", format = "f", digits = 0),
-    formatC(cyclist_stats$fatalities, big.mark = ",", format = "f", digits = 0),
-    formatC(dooring_count, big.mark = ",", format = "f", digits = 0),
-    "",
-    formatC(pedestrian_stats$crashes, big.mark = ",", format = "f", digits = 0),
-    formatC(pedestrian_stats$injuries, big.mark = ",", format = "f", digits = 0),
-    formatC(pedestrian_stats$incap_injuries, big.mark = ",", format = "f", digits = 0),
-    formatC(pedestrian_stats$fatalities, big.mark = ",", format = "f", digits = 0)
-  )
-)
+In the corridor from Clybourn to Lake Shore Drive (2019-Present):
 
-knitr::kable(summary_data,
-             format = "html",
-             caption = "<strong style='color: #333333;'>Wellington Avenue Corridor Summary 2019 - 2024</strong>") %>%
-  kableExtra::kable_styling(
-    bootstrap_options = "striped",
-    full_width = FALSE,
-    position = "left"
+- **`r formatC(total_crashes, big.mark=",")` Total reported crashes**
+- **`r formatC(total_injuries, big.mark=",")` Total injuries reported**
+- **`r formatC(bike_crashes, big.mark=",")` crashes involved a cyclist**
+- **`r formatC(ped_crashes, big.mark=",")` crashes involved a pedestrian**
+
+### High Injury Locations
+
+This map shows where injuries (of any type) are most concentrated.
+
+```{r injury-hotspots, fig.width=10, fig.height=6}
+# Filter for crashes with injuries
+injury_crashes <- wellington_crashes %>%
+  filter(INJURIES_TOTAL > 0) %>%
+  st_transform(4326)
+
+wellington_streets_4326 <- st_transform(wellington_streets, 4326)
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolylines(
+    data = wellington_streets_4326,
+    color = "#666666",
+    weight = 3
   ) %>%
-  kableExtra::row_spec(0, bold = TRUE, color = "white", background = "#4B0082") %>%
-  kableExtra::column_spec(1, bold = TRUE) %>%
-  kableExtra::row_spec(c(6, 12), background = "#f0f0f0")
+  addCircleMarkers(
+    data = injury_crashes,
+    radius = ~INJURIES_TOTAL * 3,
+    color = "#e74c3c",
+    stroke = FALSE,
+    fillOpacity = 0.6,
+    label = ~paste0("Injuries: ", INJURIES_TOTAL, " (", format(CRASH_DATE, "%Y"), ")")
+  ) %>%
+  addLegend(position = "bottomright", colors = "#e74c3c", labels = "Injury Crash") %>%
+  setView(lng = -87.658, lat = 41.9362, zoom = 14)
 ```
 
 ## Cyclist Crash Locations
