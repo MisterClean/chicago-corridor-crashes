@@ -44,3 +44,4 @@ rsconnect/
 
 # Large data files
 data/raw/people/
+data/raw/crashes/traffic_crashes.csv
