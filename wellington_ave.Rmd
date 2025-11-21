@@ -47,9 +47,18 @@ BUFFER_DISTANCE_M <- 45.72
 
 # Query OSM for Wellington Ave
 # Wellington runs from Clybourn Ave on the west to N Lake Shore Dr on the east
-wellington_query <- opq(bbox = CHICAGO_BBOX) %>%
-  add_osm_feature(key = 'name', value = 'West Wellington Avenue', value_exact = FALSE) %>%
-  osmdata_sf()
+# Use tryCatch with timeout to handle intermittent API failures
+wellington_query <- tryCatch({
+  opq(bbox = CHICAGO_BBOX, timeout = 60) %>%
+    add_osm_feature(key = 'name', value = 'West Wellington Avenue', value_exact = FALSE) %>%
+    osmdata_sf()
+}, error = function(e) {
+  message("First attempt failed, retrying after 2 seconds...")
+  Sys.sleep(2)
+  opq(bbox = CHICAGO_BBOX, timeout = 60) %>%
+    add_osm_feature(key = 'name', value = 'West Wellington Avenue', value_exact = FALSE) %>%
+    osmdata_sf()
+})
 
 wellington_streets <- wellington_query$osm_lines %>%
   select(name, geometry) %>%
@@ -58,11 +67,15 @@ wellington_streets <- wellington_query$osm_lines %>%
 # Clip wellington streets at western boundary (coordinates provided by user)
 # West boundary: 41.935885, -87.683119 (near Clybourn Ave)
 WEST_BOUNDARY_LON <- -87.683119
-wellington_streets <- st_crop(wellington_streets,
-                               xmin = WEST_BOUNDARY_LON,
-                               ymin = -Inf,
-                               xmax = Inf,
-                               ymax = Inf)
+
+# Create a bounding box from the west boundary to the eastern edge
+crop_bbox <- st_bbox(c(xmin = WEST_BOUNDARY_LON,
+                       ymin = 41.93,
+                       xmax = -87.52,  # Eastern edge (near lake)
+                       ymax = 41.94),
+                     crs = st_crs(wellington_streets))
+
+wellington_streets <- st_crop(wellington_streets, crop_bbox)
 
 # Transform to EPSG 3857 for accurate distance calculations
 wellington_streets <- sf::st_transform(wellington_streets, 3857)
@@ -245,10 +258,18 @@ time_stats <- wellington_crashes %>%
 ggplot(time_stats, aes(x = hour, y = n)) +
   geom_line(color = "#2c3e50", size = 1) +
   geom_area(fill = "#2c3e50", alpha = 0.1) +
-  scale_x_continuous(breaks = 0:23) +
+  scale_x_continuous(
+    breaks = 0:23,
+    labels = function(x) {
+      ifelse(x == 0, "12am",
+      ifelse(x < 12, paste0(x, "am"),
+      ifelse(x == 12, "12pm",
+             paste0(x - 12, "pm"))))
+    }
+  ) +
   labs(
     title = "Total Crash Frequency by Hour of Day",
-    x = "Hour (24h)",
+    x = "Time of Day",
     y = "Number of Crashes"
   )
 ```
@@ -280,11 +301,19 @@ if(!is.null(wellington_people)) {
     scale_fill_manual(values = c("Driver"="#95a5a6", "Passenger"="#34495e",
                                   "Cyclist"="#e74c3c", "Pedestrian"="#3498db",
                                   "Other"="#bdc3c7")) +
-    scale_x_continuous(breaks = 0:23) +
+    scale_x_continuous(
+      breaks = 0:23,
+      labels = function(x) {
+        ifelse(x == 0, "12am",
+        ifelse(x < 12, paste0(x, "am"),
+        ifelse(x == 12, "12pm",
+               paste0(x - 12, "pm"))))
+      }
+    ) +
     labs(
       title = "Children Involved in Crashes by Hour",
       subtitle = "Yellow highlights indicate typical school commute times (7-9am, 2-4pm)",
-      x = "Hour of Day",
+      x = "Time of Day",
       y = "Number of Children Involved",
       fill = "Mode of Transport"
     ) +
