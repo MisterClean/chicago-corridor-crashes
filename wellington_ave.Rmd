@@ -1,13 +1,10 @@
 ---
-title: "Wellington Greenway: Safety & Demographics Analysis"
-subtitle: "Clybourn Ave to Lake Shore Drive Corridor Study"
+title: "Wellington Greenway: Crash Analysis"
+subtitle: "Corridor Study by Lakeview Urbanists"
 output:
   html_document:
     output_dir: docs
     output_file: wellington_crashes.html
-    toc: true
-    toc_float: true
-    toc_depth: 3
 editor_options:
   markdown:
     wrap: 72
@@ -123,7 +120,7 @@ if(file.exists(people_file)) {
         SEX %in% c("M", "F") ~ SEX,
         TRUE ~ "X"  # Unknown/Not reported
       ),
-      # Create Age Cohorts
+      # Create Age Cohorts (ordered factor for proper chart ordering)
       age_cohort = case_when(
         is.na(AGE) ~ "Unknown",
         AGE <= 18 ~ "Child (0-18)",
@@ -133,6 +130,14 @@ if(file.exists(people_file)) {
         AGE > 65 ~ "Senior (65+)",
         TRUE ~ "Unknown"
       ),
+      age_cohort = factor(age_cohort, levels = c(
+        "Child (0-18)",
+        "Young Adult (19-29)",
+        "Adult (30-45)",
+        "Middle Age (46-65)",
+        "Senior (65+)",
+        "Unknown"
+      )),
       # Simplify Person Type
       simple_type = case_when(
         grepl("DRIVER", PERSON_TYPE) ~ "Driver",
@@ -152,7 +157,7 @@ if(file.exists(people_file)) {
 
 ## Project Context
 
-The Chicago Department of Transportation (CDOT) is proposing a **Neighborhood Greenway** on Wellington Avenue, connecting the Leavitt Greenway to the Lakefront Trail. This infrastructure is designed to be a "family-friendly" route, providing critical access to Hamlin Park, Nettelhorst School, and the Wellington CTA station.
+The Chicago Department of Transportation (CDOT) is proposing a **Neighborhood Greenway** on [Wellington Avenue](https://api.chicago.gov/filenet5/servlets/getDocumentContent?applicationId=CompleteStreets&documentId=%7BF0FB4197-0000-CD1D-9EA2-EC8C11B1EB46%7D), connecting the Leavitt Greenway to the Lakefront Trail. This proposed infrastructure is intended to be a family-friendly route, providing access to Hamlin Park, Alphonsus Academy, Wellington CTA station, and the lakefront.
 
 **Key proposed features include:**
 
@@ -162,7 +167,7 @@ The Chicago Department of Transportation (CDOT) is proposing a **Neighborhood Gr
 
 This analysis examines crash history specifically within the project boundaries: **Clybourn Avenue (West) to N Lake Shore Drive (East)**.
 
-Data for this analysis is sourced from the [Traffic Crashes](https://data.cityofchicago.org/Transportation/Traffic-Crashes-Crashes/85ca-t3if/about_data) and [Traffic Crashes - People](https://data.cityofchicago.org/Transportation/Traffic-Crashes-People/u6pd-qa9d) datasets from the Chicago City Data Portal.
+Data for this analysis is sourced from the [Traffic Crashes](https://data.cityofchicago.org/Transportation/Traffic-Crashes-Crashes/85ca-t3if/about_data) and [Traffic Crashes - People](https://data.cityofchicago.org/Transportation/Traffic-Crashes-People/u6pd-qa9d) datasets from the Chicago City Data Portal. This report was made by the [Lakeview Urbanists](https://lakeviewurbanists.com/). Signup for our newsletter to stay informed about advocacy opportunities for cycling infrastructure like this!
 
 ## Study Area Map
 
@@ -216,7 +221,7 @@ if(!is.null(wellington_people)) {
                                   "Other"="#bdc3c7")) +
     labs(
       title = "Age Distribution of People Involved in Crashes",
-      subtitle = "Wellington Ave (Clybourn to Lake Shore Drive)",
+      subtitle = "Wellington Ave (Clybourn to Lake Shore Drive) | Data: 2019-2024",
       x = "Age Group",
       y = "Number of People",
       fill = "Person Type"
@@ -236,7 +241,7 @@ if(!is.null(wellington_people)) {
     nrow()
 
   cat(paste0("There have been **", child_count,
-             " children** (under 18) involved in crashes on this corridor since 2019. ",
+             " children** (under 18) involved in crashes on this corridor (2019-2024). ",
              "Of those, **", child_ped_bike, " were walking or biking**."))
 }
 ```
@@ -269,6 +274,7 @@ ggplot(time_stats, aes(x = hour, y = n)) +
   ) +
   labs(
     title = "Total Crash Frequency by Hour of Day",
+    subtitle = "Data: 2019-2024",
     x = "Time of Day",
     y = "Number of Crashes"
   )
@@ -312,7 +318,7 @@ if(!is.null(wellington_people)) {
     ) +
     labs(
       title = "Children Involved in Crashes by Hour",
-      subtitle = "Yellow highlights indicate typical school commute times (7-9am, 2-4pm)",
+      subtitle = "Yellow highlights indicate typical school commute times (7-9am, 2-4pm) | Data: 2019-2024",
       x = "Time of Day",
       y = "Number of Children Involved",
       fill = "Mode of Transport"
@@ -323,6 +329,189 @@ if(!is.null(wellington_people)) {
              label = "School\nDismissal", size = 3) +
     theme(legend.position = "bottom")
 }
+```
+
+## Seasonal Analysis
+
+Understanding how crashes vary by season helps identify whether weather conditions, seasonal travel patterns, or other factors influence road safety along the corridor.
+
+```{r seasonal-data-prep}
+# Add season categorization to crash data
+wellington_crashes_seasonal <- wellington_crashes %>%
+  st_drop_geometry() %>%
+  mutate(
+    month = month(CRASH_DATE),
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    season = factor(season, levels = c("Winter", "Spring", "Summer", "Fall")),
+    year = year(CRASH_DATE)
+  )
+
+# Calculate seasonal statistics
+seasonal_stats <- wellington_crashes_seasonal %>%
+  group_by(season) %>%
+  summarise(
+    total_crashes = n(),
+    total_injuries = sum(INJURIES_TOTAL, na.rm = TRUE),
+    incapacitating_injuries = sum(INJURIES_INCAPACITATING, na.rm = TRUE),
+    fatal_injuries = sum(INJURIES_FATAL, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Vulnerable users by season
+cyclist_seasonal <- wellington_crashes_seasonal %>%
+  filter(grepl("PEDALCYCLIST|BICYCL", FIRST_CRASH_TYPE, ignore.case = TRUE)) %>%
+  group_by(season) %>%
+  summarise(cyclist_crashes = n(), .groups = "drop")
+
+pedestrian_seasonal <- wellington_crashes_seasonal %>%
+  filter(grepl("PEDESTRIAN", FIRST_CRASH_TYPE, ignore.case = TRUE)) %>%
+  group_by(season) %>%
+  summarise(pedestrian_crashes = n(), .groups = "drop")
+
+vulnerable_seasonal <- seasonal_stats %>%
+  left_join(cyclist_seasonal, by = "season") %>%
+  left_join(pedestrian_seasonal, by = "season") %>%
+  mutate(
+    cyclist_crashes = replace_na(cyclist_crashes, 0),
+    pedestrian_crashes = replace_na(pedestrian_crashes, 0)
+  )
+```
+
+### Total Crashes by Season
+
+This chart shows the overall distribution of crashes across the four seasons (Data: 2019-2024).
+
+```{r seasonal-crashes, fig.width=10, fig.height=6}
+ggplot(seasonal_stats, aes(x = season, y = total_crashes, fill = season)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = total_crashes), vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c(
+    "Winter" = "#3498db",   # Blue
+    "Spring" = "#2ecc71",   # Green
+    "Summer" = "#f39c12",   # Orange
+    "Fall" = "#e67e22"      # Dark orange
+  )) +
+  labs(
+    title = "Total Crashes by Season",
+    subtitle = "Wellington Ave (Clybourn to Lake Shore Drive) | Data: 2019-2024",
+    x = "Season",
+    y = "Number of Crashes"
+  ) +
+  theme(legend.position = "none")
+```
+
+### Injuries by Season
+
+This breakdown shows how injury severity varies across seasons.
+
+```{r seasonal-injuries, fig.width=10, fig.height=6}
+# Reshape data for stacked bar chart
+injury_seasonal_long <- seasonal_stats %>%
+  select(season, total_injuries, incapacitating_injuries, fatal_injuries) %>%
+  mutate(
+    non_incap_injuries = total_injuries - incapacitating_injuries - fatal_injuries
+  ) %>%
+  select(season, non_incap_injuries, incapacitating_injuries, fatal_injuries) %>%
+  tidyr::pivot_longer(
+    cols = c(non_incap_injuries, incapacitating_injuries, fatal_injuries),
+    names_to = "injury_type",
+    values_to = "count"
+  ) %>%
+  mutate(
+    injury_type = factor(injury_type,
+      levels = c("fatal_injuries", "incapacitating_injuries", "non_incap_injuries"),
+      labels = c("Fatal", "Incapacitating", "Other Injuries")
+    )
+  )
+
+ggplot(injury_seasonal_long, aes(x = season, y = count, fill = injury_type)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c(
+    "Fatal" = "#c0392b",
+    "Incapacitating" = "#e74c3c",
+    "Other Injuries" = "#f8b739"
+  )) +
+  labs(
+    title = "Injuries by Season and Severity",
+    subtitle = "Wellington Ave (Clybourn to Lake Shore Drive) | Data: 2019-2024",
+    x = "Season",
+    y = "Number of Injuries",
+    fill = "Injury Type"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+### Vulnerable Road Users by Season
+
+Cyclist and pedestrian crashes show distinct seasonal patterns, often influenced by weather and travel mode choices.
+
+```{r seasonal-vulnerable, fig.width=10, fig.height=6}
+# Reshape for grouped bar chart
+vulnerable_long <- vulnerable_seasonal %>%
+  select(season, cyclist_crashes, pedestrian_crashes) %>%
+  tidyr::pivot_longer(
+    cols = c(cyclist_crashes, pedestrian_crashes),
+    names_to = "user_type",
+    values_to = "crashes"
+  ) %>%
+  mutate(
+    user_type = factor(user_type,
+      levels = c("cyclist_crashes", "pedestrian_crashes"),
+      labels = c("Cyclists", "Pedestrians")
+    )
+  )
+
+ggplot(vulnerable_long, aes(x = season, y = crashes, fill = user_type)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = crashes), position = position_dodge(width = 0.9),
+            vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = c("Cyclists" = "#e74c3c", "Pedestrians" = "#3498db")) +
+  labs(
+    title = "Vulnerable Road User Crashes by Season",
+    subtitle = "Wellington Ave (Clybourn to Lake Shore Drive) | Data: 2019-2024",
+    x = "Season",
+    y = "Number of Crashes",
+    fill = "User Type"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+### Seasonal Summary Statistics
+
+The table below provides a comprehensive overview of crashes, injuries, and vulnerable user involvement across all four seasons (Data: 2019-2024).
+
+```{r seasonal-summary-table, results='asis'}
+seasonal_table <- vulnerable_seasonal %>%
+  mutate(
+    avg_crashes_per_month = round(total_crashes / 3, 1),
+    injury_rate = paste0(round((total_injuries / total_crashes) * 100, 1), "%")
+  ) %>%
+  select(
+    Season = season,
+    `Total Crashes` = total_crashes,
+    `Avg/Month` = avg_crashes_per_month,
+    `Total Injuries` = total_injuries,
+    `Injury Rate` = injury_rate,
+    `Cyclist Crashes` = cyclist_crashes,
+    `Pedestrian Crashes` = pedestrian_crashes
+  )
+
+kable(seasonal_table,
+      format = "html",
+      align = c("l", "r", "r", "r", "r", "r", "r")) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE, background = "#4B0082", color = "white") %>%
+  column_spec(1, bold = TRUE, width = "8em") %>%
+  column_spec(2:7, width = "7em")
 ```
 
 ## General Safety Summary
@@ -342,18 +531,227 @@ pedestrian_crashes <- wellington_crashes %>%
 # Counts for summary
 ped_crashes <- nrow(pedestrian_crashes)
 bike_crashes <- nrow(cyclist_crashes)
+
+# Aggregate person-level data for enhanced tooltips
+if(!is.null(wellington_people)) {
+  crash_people_summary <- wellington_people %>%
+    group_by(CRASH_RECORD_ID) %>%
+    summarise(
+      num_people = n(),
+      num_drivers = sum(simple_type == "Driver", na.rm = TRUE),
+      num_passengers = sum(simple_type == "Passenger", na.rm = TRUE),
+      num_cyclists = sum(simple_type == "Cyclist", na.rm = TRUE),
+      num_pedestrians = sum(simple_type == "Pedestrian", na.rm = TRUE),
+      num_other = sum(simple_type == "Other", na.rm = TRUE),
+      age_min = min(AGE, na.rm = TRUE),
+      age_max = max(AGE, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      # Format age range for display
+      age_range = case_when(
+        is.infinite(age_min) ~ "Unknown",
+        age_min == age_max ~ as.character(age_min),
+        TRUE ~ paste0(age_min, "-", age_max)
+      ),
+      # Create people summary text
+      people_summary = paste0(
+        if_else(num_drivers > 0, paste0(num_drivers, " driver", if_else(num_drivers > 1, "s", "")), ""),
+        if_else(num_passengers > 0,
+                paste0(if_else(num_drivers > 0, ", ", ""), num_passengers, " passenger", if_else(num_passengers > 1, "s", "")), ""),
+        if_else(num_cyclists > 0,
+                paste0(if_else(num_drivers > 0 | num_passengers > 0, ", ", ""), num_cyclists, " cyclist", if_else(num_cyclists > 1, "s", "")), ""),
+        if_else(num_pedestrians > 0,
+                paste0(if_else(num_drivers > 0 | num_passengers > 0 | num_cyclists > 0, ", ", ""),
+                       num_pedestrians, " pedestrian", if_else(num_pedestrians > 1, "s", "")), ""),
+        if_else(num_other > 0,
+                paste0(if_else(num_drivers > 0 | num_passengers > 0 | num_cyclists > 0 | num_pedestrians > 0, ", ", ""),
+                       num_other, " other"), "")
+      )
+    )
+} else {
+  crash_people_summary <- NULL
+}
 ```
 
-In the corridor from Clybourn to Lake Shore Drive (2019-Present):
+In the corridor from Clybourn to Lake Shore Drive (2019-2024):
 
 - **`r formatC(total_crashes, big.mark=",")` Total reported crashes**
 - **`r formatC(total_injuries, big.mark=",")` Total injuries reported**
 - **`r formatC(bike_crashes, big.mark=",")` crashes involved a cyclist**
 - **`r formatC(ped_crashes, big.mark=",")` crashes involved a pedestrian**
 
+## Detailed Crash Statistics
+
+The following tables provide a comprehensive breakdown of crash severity, vulnerable road users, and impacts on children in the corridor.
+
+```{r summary-stats-calc}
+# Calculate detailed summary statistics for tables
+
+# Table 1: Overall Crash Summary
+if(!is.null(wellington_people)) {
+  overall_stats <- data.frame(
+    Metric = c(
+      "Total Crashes",
+      "Total Injuries (All Severities)",
+      "Incapacitating Injuries",
+      "Fatal Injuries",
+      "Hit-and-Run Crashes",
+      "Dooring Incidents"
+    ),
+    Count = c(
+      nrow(wellington_crashes),
+      sum(wellington_crashes$INJURIES_TOTAL, na.rm = TRUE),
+      sum(wellington_crashes$INJURIES_INCAPACITATING, na.rm = TRUE),
+      sum(wellington_crashes$INJURIES_FATAL, na.rm = TRUE),
+      sum(wellington_crashes$HIT_AND_RUN_I == "Y", na.rm = TRUE),
+      sum(wellington_crashes$DOORING_I == "Y", na.rm = TRUE)
+    )
+  )
+
+  # Table 2: Vulnerable Road Users
+  # Count crashes and people involving cyclists and pedestrians
+  cyclist_people <- wellington_people %>%
+    filter(simple_type == "Cyclist")
+
+  pedestrian_people <- wellington_people %>%
+    filter(simple_type == "Pedestrian")
+
+  # Count injured (excluding "NO INDICATION OF INJURY")
+  cyclist_injured <- cyclist_people %>%
+    filter(!is.na(INJURY_CLASSIFICATION) &
+           INJURY_CLASSIFICATION != "NO INDICATION OF INJURY") %>%
+    nrow()
+
+  pedestrian_injured <- pedestrian_people %>%
+    filter(!is.na(INJURY_CLASSIFICATION) &
+           INJURY_CLASSIFICATION != "NO INDICATION OF INJURY") %>%
+    nrow()
+
+  # Count unique crashes involving each type
+  crashes_with_cyclists <- n_distinct(cyclist_people$CRASH_RECORD_ID)
+  crashes_with_pedestrians <- n_distinct(pedestrian_people$CRASH_RECORD_ID)
+
+  vulnerable_users_stats <- data.frame(
+    Metric = c(
+      "Crashes Involving Cyclists",
+      "Cyclists Involved (People)",
+      "Cyclists Injured",
+      "Crashes Involving Pedestrians",
+      "Pedestrians Involved (People)",
+      "Pedestrians Injured"
+    ),
+    Count = c(
+      crashes_with_cyclists,
+      nrow(cyclist_people),
+      cyclist_injured,
+      crashes_with_pedestrians,
+      nrow(pedestrian_people),
+      pedestrian_injured
+    )
+  )
+
+  # Table 3: Children in Crashes
+  child_people <- wellington_people %>%
+    filter(age_cohort == "Child (0-18)")
+
+  child_injured <- child_people %>%
+    filter(!is.na(INJURY_CLASSIFICATION) &
+           INJURY_CLASSIFICATION != "NO INDICATION OF INJURY") %>%
+    nrow()
+
+  crashes_with_children <- n_distinct(child_people$CRASH_RECORD_ID)
+
+  total_people <- nrow(wellington_people)
+  child_percentage <- (nrow(child_people) / total_people) * 100
+
+  children_stats <- data.frame(
+    Metric = c(
+      "Crashes Involving Children (0-18)",
+      "Children Involved in Crashes",
+      "Children Injured",
+      "% of All People in Crashes Who Are Children"
+    ),
+    Count = c(
+      crashes_with_children,
+      nrow(child_people),
+      child_injured,
+      paste0(round(child_percentage, 1), "%")
+    )
+  )
+}
+```
+
+### Overall Crash Summary
+
+This table summarizes the total impact of crashes along the Wellington Avenue corridor (Data: 2019-2024).
+
+```{r table-overall, results='asis'}
+if(!is.null(wellington_people)) {
+  kable(overall_stats,
+        format = "html",
+        align = c("l", "r"),
+        col.names = c("Metric", "Count")) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      full_width = FALSE,
+      position = "left"
+    ) %>%
+    row_spec(0, bold = TRUE, background = "#4B0082", color = "white") %>%
+    row_spec(c(2, 3, 4), background = "#fff3cd") %>%  # Highlight injury rows
+    column_spec(1, width = "20em") %>%
+    column_spec(2, width = "8em", bold = TRUE)
+}
+```
+
+### Vulnerable Road Users
+
+Cyclists and pedestrians are particularly at risk in traffic crashes. This table shows the involvement and injury rates for these vulnerable road users (Data: 2019-2024).
+
+```{r table-vulnerable-users, results='asis'}
+if(!is.null(wellington_people)) {
+  kable(vulnerable_users_stats,
+        format = "html",
+        align = c("l", "r"),
+        col.names = c("Metric", "Count")) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      full_width = FALSE,
+      position = "left"
+    ) %>%
+    row_spec(0, bold = TRUE, background = "#4B0082", color = "white") %>%
+    row_spec(c(3, 6), background = "#f8d7da") %>%  # Highlight injury rows
+    column_spec(1, width = "20em") %>%
+    column_spec(2, width = "8em", bold = TRUE)
+}
+```
+
+### Children in Crashes
+
+Given the proposed Neighborhood Greenway's focus on "family-friendly" infrastructure, understanding how children are affected by crashes is critical (Data: 2019-2024).
+
+```{r table-children, results='asis'}
+if(!is.null(wellington_people)) {
+  kable(children_stats,
+        format = "html",
+        align = c("l", "r"),
+        col.names = c("Metric", "Value")) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      full_width = FALSE,
+      position = "left"
+    ) %>%
+    row_spec(0, bold = TRUE, background = "#4B0082", color = "white") %>%
+    row_spec(3, background = "#f8d7da") %>%  # Highlight injured children
+    row_spec(4, background = "#d1ecf1") %>%  # Highlight percentage
+    column_spec(1, width = "20em") %>%
+    column_spec(2, width = "8em", bold = TRUE)
+}
+```
+
 ### High Injury Locations
 
-This map shows where injuries (of any type) are most concentrated.
+This map shows where injuries (of any type) are most concentrated along the Wellington Avenue corridor (Data: 2019-2024).
 
 ```{r injury-hotspots, fig.width=10, fig.height=6}
 # Filter for crashes with injuries
@@ -361,7 +759,43 @@ injury_crashes <- wellington_crashes %>%
   filter(INJURIES_TOTAL > 0) %>%
   st_transform(4326)
 
+# Join with person summary data for enhanced tooltips
+if(!is.null(crash_people_summary)) {
+  injury_crashes <- injury_crashes %>%
+    left_join(crash_people_summary, by = "CRASH_RECORD_ID")
+}
+
 wellington_streets_4326 <- st_transform(wellington_streets, 4326)
+
+# Create enhanced tooltips
+injury_crashes <- injury_crashes %>%
+  mutate(
+    tooltip_html = paste0(
+      "<b>", format(CRASH_DATE, "%B %d, %Y"), " at ", format(CRASH_DATE, "%I:%M %p"), "</b><br>",
+      "<b>Crash Type:</b> ", FIRST_CRASH_TYPE, "<br>",
+      "<hr style='margin: 3px 0;'>",
+      "<b>Injuries:</b> ", INJURIES_TOTAL,
+      if_else(!is.na(INJURIES_FATAL) & INJURIES_FATAL > 0,
+              paste0(" (", INJURIES_FATAL, " fatal)"), ""),
+      if_else(!is.na(INJURIES_INCAPACITATING) & INJURIES_INCAPACITATING > 0,
+              paste0(" (", INJURIES_INCAPACITATING, " incapacitating)"), ""), "<br>",
+      if_else(!is.na(people_summary),
+              paste0("<b>People Involved:</b> ", people_summary, "<br>"), ""),
+      if_else(!is.na(age_range) & age_range != "Unknown",
+              paste0("<b>Age Range:</b> ", age_range, " years<br>"), ""),
+      "<hr style='margin: 3px 0;'>",
+      if_else(!is.na(PRIM_CONTRIBUTORY_CAUSE) & PRIM_CONTRIBUTORY_CAUSE != "UNABLE TO DETERMINE",
+              paste0("<b>Primary Cause:</b> ", PRIM_CONTRIBUTORY_CAUSE, "<br>"), ""),
+      if_else(!is.na(WEATHER_CONDITION) & WEATHER_CONDITION != "UNKNOWN",
+              paste0("<b>Weather:</b> ", WEATHER_CONDITION, "<br>"), ""),
+      if_else(!is.na(LIGHTING_CONDITION) & LIGHTING_CONDITION != "UNKNOWN",
+              paste0("<b>Lighting:</b> ", LIGHTING_CONDITION, "<br>"), ""),
+      if_else(!is.na(POSTED_SPEED_LIMIT) & POSTED_SPEED_LIMIT > 0,
+              paste0("<b>Speed Limit:</b> ", POSTED_SPEED_LIMIT, " mph<br>"), ""),
+      if_else(!is.na(HIT_AND_RUN_I) & HIT_AND_RUN_I == "Y",
+              "<b style='color: #e74c3c;'>HIT AND RUN</b><br>", "")
+    )
+  )
 
 leaflet() %>%
   addProviderTiles(providers$CartoDB.Positron) %>%
@@ -376,7 +810,7 @@ leaflet() %>%
     color = "#e74c3c",
     stroke = FALSE,
     fillOpacity = 0.6,
-    label = ~paste0("Injuries: ", INJURIES_TOTAL, " (", format(CRASH_DATE, "%Y"), ")")
+    label = ~lapply(tooltip_html, htmltools::HTML)
   ) %>%
   addLegend(position = "bottomright", colors = "#e74c3c", labels = "Injury Crash") %>%
   setView(lng = -87.658, lat = 41.9362, zoom = 14)
@@ -384,12 +818,51 @@ leaflet() %>%
 
 ## Cyclist Crash Locations
 
-This map shows all crashes involving cyclists along the Wellington Avenue corridor.
+This map shows all crashes involving cyclists along the Wellington Avenue corridor (Data: 2019-2024).
 
 ```{r cyclist-map, fig.width=10, fig.height=6}
 # Transform cyclist crashes to WGS84 for mapping
 cyclist_crashes_4326 <- st_transform(cyclist_crashes, 4326)
+
+# Join with person summary data for enhanced tooltips
+if(!is.null(crash_people_summary)) {
+  cyclist_crashes_4326 <- cyclist_crashes_4326 %>%
+    left_join(crash_people_summary, by = "CRASH_RECORD_ID")
+}
+
 wellington_streets_4326 <- st_transform(wellington_streets, 4326)
+
+# Create enhanced tooltips with dooring information
+cyclist_crashes_4326 <- cyclist_crashes_4326 %>%
+  mutate(
+    tooltip_html = paste0(
+      "<b>", format(CRASH_DATE, "%B %d, %Y"), " at ", format(CRASH_DATE, "%I:%M %p"), "</b><br>",
+      "<b>Crash Type:</b> ", FIRST_CRASH_TYPE, "<br>",
+      if_else(!is.na(DOORING_I) & DOORING_I == "Y",
+              "<b style='color: #e74c3c; font-size: 14px;'>⚠ DOORING INCIDENT</b><br>", ""),
+      "<hr style='margin: 3px 0;'>",
+      "<b>Injuries:</b> ", INJURIES_TOTAL,
+      if_else(!is.na(INJURIES_FATAL) & INJURIES_FATAL > 0,
+              paste0(" (", INJURIES_FATAL, " fatal)"), ""),
+      if_else(!is.na(INJURIES_INCAPACITATING) & INJURIES_INCAPACITATING > 0,
+              paste0(" (", INJURIES_INCAPACITATING, " incapacitating)"), ""), "<br>",
+      if_else(!is.na(people_summary),
+              paste0("<b>People Involved:</b> ", people_summary, "<br>"), ""),
+      if_else(!is.na(age_range) & age_range != "Unknown",
+              paste0("<b>Age Range:</b> ", age_range, " years<br>"), ""),
+      "<hr style='margin: 3px 0;'>",
+      if_else(!is.na(PRIM_CONTRIBUTORY_CAUSE) & PRIM_CONTRIBUTORY_CAUSE != "UNABLE TO DETERMINE",
+              paste0("<b>Primary Cause:</b> ", PRIM_CONTRIBUTORY_CAUSE, "<br>"), ""),
+      if_else(!is.na(WEATHER_CONDITION) & WEATHER_CONDITION != "UNKNOWN",
+              paste0("<b>Weather:</b> ", WEATHER_CONDITION, "<br>"), ""),
+      if_else(!is.na(LIGHTING_CONDITION) & LIGHTING_CONDITION != "UNKNOWN",
+              paste0("<b>Lighting:</b> ", LIGHTING_CONDITION, "<br>"), ""),
+      if_else(!is.na(POSTED_SPEED_LIMIT) & POSTED_SPEED_LIMIT > 0,
+              paste0("<b>Speed Limit:</b> ", POSTED_SPEED_LIMIT, " mph<br>"), ""),
+      if_else(!is.na(HIT_AND_RUN_I) & HIT_AND_RUN_I == "Y",
+              "<b style='color: #e74c3c;'>HIT AND RUN</b><br>", "")
+    )
+  )
 
 # Create cyclist crash map
 cyclist_map <- leaflet() %>%
@@ -408,11 +881,7 @@ cyclist_map <- leaflet() %>%
     fillOpacity = 0.7,
     stroke = TRUE,
     weight = 1,
-    label = ~paste0(
-      "Crash Date: ", format(CRASH_DATE, "%Y-%m-%d"), "<br>",
-      "Injuries: ", INJURIES_TOTAL, "<br>",
-      "Type: ", FIRST_CRASH_TYPE
-    ) %>% lapply(htmltools::HTML)
+    label = ~lapply(tooltip_html, htmltools::HTML)
   ) %>%
   addLegend(
     position = "bottomright",
@@ -427,11 +896,49 @@ cyclist_map
 
 ## Pedestrian Crash Locations
 
-This map shows all crashes involving pedestrians along the Wellington Avenue corridor.
+This map shows all crashes involving pedestrians along the Wellington Avenue corridor (Data: 2019-2024).
 
 ```{r pedestrian-map, fig.width=10, fig.height=6}
 # Transform pedestrian crashes to WGS84 for mapping
 pedestrian_crashes_4326 <- st_transform(pedestrian_crashes, 4326)
+
+# Join with person summary data for enhanced tooltips
+if(!is.null(crash_people_summary)) {
+  pedestrian_crashes_4326 <- pedestrian_crashes_4326 %>%
+    left_join(crash_people_summary, by = "CRASH_RECORD_ID")
+}
+
+# Create enhanced tooltips
+pedestrian_crashes_4326 <- pedestrian_crashes_4326 %>%
+  mutate(
+    tooltip_html = paste0(
+      "<b>", format(CRASH_DATE, "%B %d, %Y"), " at ", format(CRASH_DATE, "%I:%M %p"), "</b><br>",
+      "<b>Crash Type:</b> ", FIRST_CRASH_TYPE, "<br>",
+      "<hr style='margin: 3px 0;'>",
+      "<b>Injuries:</b> ", INJURIES_TOTAL,
+      if_else(!is.na(INJURIES_FATAL) & INJURIES_FATAL > 0,
+              paste0(" (", INJURIES_FATAL, " fatal)"), ""),
+      if_else(!is.na(INJURIES_INCAPACITATING) & INJURIES_INCAPACITATING > 0,
+              paste0(" (", INJURIES_INCAPACITATING, " incapacitating)"), ""), "<br>",
+      if_else(!is.na(people_summary),
+              paste0("<b>People Involved:</b> ", people_summary, "<br>"), ""),
+      if_else(!is.na(age_range) & age_range != "Unknown",
+              paste0("<b>Age Range:</b> ", age_range, " years<br>"), ""),
+      "<hr style='margin: 3px 0;'>",
+      if_else(!is.na(PRIM_CONTRIBUTORY_CAUSE) & PRIM_CONTRIBUTORY_CAUSE != "UNABLE TO DETERMINE",
+              paste0("<b>Primary Cause:</b> ", PRIM_CONTRIBUTORY_CAUSE, "<br>"), ""),
+      if_else(!is.na(WEATHER_CONDITION) & WEATHER_CONDITION != "UNKNOWN",
+              paste0("<b>Weather:</b> ", WEATHER_CONDITION, "<br>"), ""),
+      if_else(!is.na(LIGHTING_CONDITION) & LIGHTING_CONDITION != "UNKNOWN",
+              paste0("<b>Lighting:</b> ", LIGHTING_CONDITION, "<br>"), ""),
+      if_else(!is.na(POSTED_SPEED_LIMIT) & POSTED_SPEED_LIMIT > 0,
+              paste0("<b>Speed Limit:</b> ", POSTED_SPEED_LIMIT, " mph<br>"), ""),
+      if_else(!is.na(INTERSECTION_RELATED_I) & INTERSECTION_RELATED_I == "Y",
+              "<b>Location:</b> Intersection-related<br>", ""),
+      if_else(!is.na(HIT_AND_RUN_I) & HIT_AND_RUN_I == "Y",
+              "<b style='color: #e74c3c;'>HIT AND RUN</b><br>", "")
+    )
+  )
 
 # Create pedestrian crash map
 pedestrian_map <- leaflet() %>%
@@ -450,11 +957,7 @@ pedestrian_map <- leaflet() %>%
     fillOpacity = 0.7,
     stroke = TRUE,
     weight = 1,
-    label = ~paste0(
-      "Crash Date: ", format(CRASH_DATE, "%Y-%m-%d"), "<br>",
-      "Injuries: ", INJURIES_TOTAL, "<br>",
-      "Type: ", FIRST_CRASH_TYPE
-    ) %>% lapply(htmltools::HTML)
+    label = ~lapply(tooltip_html, htmltools::HTML)
   ) %>%
   addLegend(
     position = "bottomright",
@@ -469,7 +972,7 @@ pedestrian_map
 
 ## Crash Clusters
 
-This heat map visualization shows where crashes are concentrated along the Wellington Avenue corridor.
+This heat map visualization shows where crashes are concentrated along the Wellington Avenue corridor (Data: 2019-2024).
 
 ```{r crash-clusters, fig.width=10, fig.height=6}
 # Transform crashes to WGS84 for mapping

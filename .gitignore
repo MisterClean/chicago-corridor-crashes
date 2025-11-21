@@ -27,6 +27,9 @@
 # R Environment Variables
 .Renviron
 
+# Allow HTML files in root for GitHub Pages
+!*.html
+
 # pkgdown site
 docs/
 
