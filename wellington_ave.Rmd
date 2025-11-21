@@ -1,0 +1,368 @@
+---
+title: "Wellington Avenue Corridor Crash Analysis"
+output:
+  html_document:
+    output_dir: docs
+    output_file: wellington_crashes.html
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE, results='hide'}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r load-data, message=FALSE, warning=FALSE, results='hide'}
+# Source utility functions (which loads libraries)
+source("R/utils.R")
+library(sf)
+library(dplyr)
+library(osmdata)
+library(stringr)
+library(leaflet)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(lubridate)
+
+# Read and process crash data
+crashes <- load_crash_data("data/raw/crashes/traffic_crashes.csv")
+crashes_sf <- convert_to_sf(crashes)
+
+# Define a bounding box for Chicago and the buffer distance (150 ft ~ 45.72 m)
+CHICAGO_BBOX <- c(-87.9401, 41.6445, -87.5239, 42.0230)
+BUFFER_DISTANCE_M <- 45.72
+
+# Query OSM for Wellington Ave
+# Wellington runs from approximately Clybourn Ave (-87.663) to the lakefront (-87.638)
+wellington_query <- opq(bbox = CHICAGO_BBOX) %>%
+  add_osm_feature(key = 'name', value = 'West Wellington Avenue', value_exact = FALSE) %>%
+  osmdata_sf()
+
+wellington_west <- wellington_query$osm_lines
+
+# Query for East Wellington Avenue
+wellington_east_query <- opq(bbox = CHICAGO_BBOX) %>%
+  add_osm_feature(key = 'name', value = 'East Wellington Avenue', value_exact = FALSE) %>%
+  osmdata_sf()
+
+wellington_east <- wellington_east_query$osm_lines
+
+# Extract geometry and combine
+west_geom <- sf::st_geometry(wellington_west)
+east_geom <- sf::st_geometry(wellington_east)
+
+# Combine the geometry into a single sf object
+combined_geom <- c(west_geom, east_geom)
+wellington_streets <- sf::st_sf(
+  name = rep("Wellington Avenue", length(combined_geom)),
+  geometry = combined_geom,
+  crs = sf::st_crs(wellington_west)
+)
+
+# Transform to EPSG 3857 for accurate distance calculations
+wellington_streets <- sf::st_transform(wellington_streets, 3857)
+crashes_sf <- sf::st_transform(crashes_sf, 3857)
+
+# Create buffer around Wellington Ave and identify intersecting crashes
+buffer <- st_buffer(wellington_streets, dist = BUFFER_DISTANCE_M)
+intersects <- st_intersects(crashes_sf, buffer, sparse = FALSE)
+
+# Filter crashes within buffer
+wellington_crashes <- crashes_sf[apply(intersects, 1, any), ] %>%
+  mutate(
+    crash_count = 1,
+    total_injuries = INJURIES_TOTAL,
+    incap_injuries = INJURIES_INCAPACITATING
+  )
+```
+
+## About
+
+Data for this analysis is sourced from the [Traffic Crashes](https://data.cityofchicago.org/Transportation/Traffic-Crashes-Crashes/85ca-t3if/about_data) dataset from the Chicago City Data Portal.
+
+## Study Area Definition
+
+This analysis examines crashes within 150 feet of Wellington Avenue between Clybourn Avenue and the lakefront. Here's a visualization of the study area:
+
+```{r buffer-visualization, fig.width=10, fig.height=6}
+# Transform to WGS84 for visualization
+wellington_streets_4326 <- st_transform(wellington_streets, 4326)
+buffer_4326 <- st_transform(buffer, 4326)
+
+# Create visualization of the buffer
+buffer_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolylines(
+    data = wellington_streets_4326,
+    color = "#4B0082",
+    weight = 3,
+    label = "Wellington Avenue"
+  ) %>%
+  addPolygons(
+    data = buffer_4326,
+    fillColor = "#9370DB",
+    fillOpacity = 0.3,
+    color = "#4B0082",
+    weight = 2,
+    label = "150ft Buffer Zone"
+  ) %>%
+  setView(lng = -87.6505, lat = 41.9362, zoom = 14)
+
+buffer_map
+```
+
+## Summary Statistics
+
+```{r crash-stats}
+# Calculate overall statistics
+total_crashes <- nrow(wellington_crashes)
+total_injuries <- sum(wellington_crashes$INJURIES_TOTAL, na.rm = TRUE)
+total_incap_injuries <- sum(wellington_crashes$INJURIES_INCAPACITATING, na.rm = TRUE)
+crashes_with_injury <- sum(wellington_crashes$INJURIES_TOTAL > 0, na.rm = TRUE)
+
+# Fatalities (from INJURIES_FATAL column if available, otherwise estimate from incapacitating)
+total_fatalities <- sum(wellington_crashes$INJURIES_FATAL, na.rm = TRUE)
+
+# Cyclist statistics
+cyclist_crashes <- wellington_crashes %>%
+  filter(grepl("PEDALCYCLIST|BICYCL", FIRST_CRASH_TYPE, ignore.case = TRUE))
+
+cyclist_stats <- list(
+  crashes = nrow(cyclist_crashes),
+  injuries = sum(cyclist_crashes$INJURIES_TOTAL, na.rm = TRUE),
+  incap_injuries = sum(cyclist_crashes$INJURIES_INCAPACITATING, na.rm = TRUE),
+  fatalities = sum(cyclist_crashes$INJURIES_FATAL, na.rm = TRUE)
+)
+
+# Check for dooring incidents
+cyclist_crashes <- cyclist_crashes %>%
+  mutate(
+    is_dooring = grepl("DOOR|DOORED", CRASH_TYPE, ignore.case = TRUE) |
+                 grepl("DOOR|DOORED", FIRST_CRASH_TYPE, ignore.case = TRUE)
+  )
+dooring_count <- sum(cyclist_crashes$is_dooring, na.rm = TRUE)
+
+# Pedestrian statistics
+pedestrian_crashes <- wellington_crashes %>%
+  filter(grepl("PEDESTRIAN", FIRST_CRASH_TYPE, ignore.case = TRUE))
+
+pedestrian_stats <- list(
+  crashes = nrow(pedestrian_crashes),
+  injuries = sum(pedestrian_crashes$INJURIES_TOTAL, na.rm = TRUE),
+  incap_injuries = sum(pedestrian_crashes$INJURIES_INCAPACITATING, na.rm = TRUE),
+  fatalities = sum(pedestrian_crashes$INJURIES_FATAL, na.rm = TRUE)
+)
+
+# Create summary table
+summary_data <- tibble(
+  Category = c(
+    "Total Crashes",
+    "Crashes with Injury",
+    "Total Injuries",
+    "Incapacitating Injuries",
+    "Fatalities",
+    "",
+    "Cyclist Crashes",
+    "Cyclists Injured",
+    "Cyclists Incapacitated",
+    "Cyclists Killed",
+    "Dooring Incidents",
+    "",
+    "Pedestrian Crashes",
+    "Pedestrians Injured",
+    "Pedestrians Incapacitated",
+    "Pedestrians Killed"
+  ),
+  Count = c(
+    formatC(total_crashes, big.mark = ",", format = "f", digits = 0),
+    formatC(crashes_with_injury, big.mark = ",", format = "f", digits = 0),
+    formatC(total_injuries, big.mark = ",", format = "f", digits = 0),
+    formatC(total_incap_injuries, big.mark = ",", format = "f", digits = 0),
+    formatC(total_fatalities, big.mark = ",", format = "f", digits = 0),
+    "",
+    formatC(cyclist_stats$crashes, big.mark = ",", format = "f", digits = 0),
+    formatC(cyclist_stats$injuries, big.mark = ",", format = "f", digits = 0),
+    formatC(cyclist_stats$incap_injuries, big.mark = ",", format = "f", digits = 0),
+    formatC(cyclist_stats$fatalities, big.mark = ",", format = "f", digits = 0),
+    formatC(dooring_count, big.mark = ",", format = "f", digits = 0),
+    "",
+    formatC(pedestrian_stats$crashes, big.mark = ",", format = "f", digits = 0),
+    formatC(pedestrian_stats$injuries, big.mark = ",", format = "f", digits = 0),
+    formatC(pedestrian_stats$incap_injuries, big.mark = ",", format = "f", digits = 0),
+    formatC(pedestrian_stats$fatalities, big.mark = ",", format = "f", digits = 0)
+  )
+)
+
+knitr::kable(summary_data,
+             format = "html",
+             caption = "<strong style='color: #333333;'>Wellington Avenue Corridor Summary 2019 - 2024</strong>") %>%
+  kableExtra::kable_styling(
+    bootstrap_options = "striped",
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  kableExtra::row_spec(0, bold = TRUE, color = "white", background = "#4B0082") %>%
+  kableExtra::column_spec(1, bold = TRUE) %>%
+  kableExtra::row_spec(c(6, 12), background = "#f0f0f0")
+```
+
+## Cyclist Crash Locations
+
+This map shows all crashes involving cyclists along the Wellington Avenue corridor.
+
+```{r cyclist-map, fig.width=10, fig.height=6}
+# Transform cyclist crashes to WGS84 for mapping
+cyclist_crashes_4326 <- st_transform(cyclist_crashes, 4326)
+wellington_streets_4326 <- st_transform(wellington_streets, 4326)
+
+# Create cyclist crash map
+cyclist_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolylines(
+    data = wellington_streets_4326,
+    color = "#666666",
+    weight = 3,
+    label = "Wellington Avenue"
+  ) %>%
+  addCircleMarkers(
+    data = cyclist_crashes_4326,
+    radius = 5,
+    color = "#e74c3c",
+    fillColor = "#e74c3c",
+    fillOpacity = 0.7,
+    stroke = TRUE,
+    weight = 1,
+    label = ~paste0(
+      "Crash Date: ", format(CRASH_DATE, "%Y-%m-%d"), "<br>",
+      "Injuries: ", INJURIES_TOTAL, "<br>",
+      "Type: ", FIRST_CRASH_TYPE
+    ) %>% lapply(htmltools::HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    colors = "#e74c3c",
+    labels = "Cyclist Crash",
+    title = "Legend"
+  ) %>%
+  setView(lng = -87.6505, lat = 41.9362, zoom = 14)
+
+cyclist_map
+```
+
+## Pedestrian Crash Locations
+
+This map shows all crashes involving pedestrians along the Wellington Avenue corridor.
+
+```{r pedestrian-map, fig.width=10, fig.height=6}
+# Transform pedestrian crashes to WGS84 for mapping
+pedestrian_crashes_4326 <- st_transform(pedestrian_crashes, 4326)
+
+# Create pedestrian crash map
+pedestrian_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolylines(
+    data = wellington_streets_4326,
+    color = "#666666",
+    weight = 3,
+    label = "Wellington Avenue"
+  ) %>%
+  addCircleMarkers(
+    data = pedestrian_crashes_4326,
+    radius = 5,
+    color = "#3498db",
+    fillColor = "#3498db",
+    fillOpacity = 0.7,
+    stroke = TRUE,
+    weight = 1,
+    label = ~paste0(
+      "Crash Date: ", format(CRASH_DATE, "%Y-%m-%d"), "<br>",
+      "Injuries: ", INJURIES_TOTAL, "<br>",
+      "Type: ", FIRST_CRASH_TYPE
+    ) %>% lapply(htmltools::HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    colors = "#3498db",
+    labels = "Pedestrian Crash",
+    title = "Legend"
+  ) %>%
+  setView(lng = -87.6505, lat = 41.9362, zoom = 14)
+
+pedestrian_map
+```
+
+## Crash Clusters
+
+This heat map visualization shows where crashes are concentrated along the Wellington Avenue corridor.
+
+```{r crash-clusters, fig.width=10, fig.height=6}
+# Transform crashes to WGS84 for mapping
+wellington_crashes_4326 <- st_transform(wellington_crashes, 4326)
+
+# Create hex grid for crash clustering
+bbox_utm <- st_transform(st_as_sfc(st_bbox(wellington_crashes_4326)), 26916)
+
+hex_grid <- st_make_grid(
+  bbox_utm,
+  cellsize = c(150, 150),  # 150 meter hexagons
+  square = FALSE
+) %>%
+  st_sf() %>%
+  st_transform(4326)
+
+# Calculate crash counts per hexagon
+hex_sf <- hex_grid %>%
+  mutate(
+    count = lengths(st_intersects(., wellington_crashes_4326)),
+    total_injuries = sapply(st_intersects(., wellington_crashes_4326), function(idx) {
+      sum(wellington_crashes_4326$INJURIES_TOTAL[idx], na.rm = TRUE)
+    })
+  ) %>%
+  filter(count > 0)
+
+# Color palette
+pal <- colorNumeric(
+  palette = "YlOrRd",
+  domain = hex_sf$count
+)
+
+# Create the map
+cluster_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolylines(
+    data = wellington_streets_4326,
+    color = "#666666",
+    weight = 3,
+    label = "Wellington Avenue"
+  ) %>%
+  addPolygons(
+    data = hex_sf,
+    fillColor = ~pal(count),
+    fillOpacity = 0.7,
+    color = "#FFFFFF",
+    weight = 1,
+    label = ~sprintf(
+      "%d crashes<br>%d injuries",
+      count,
+      total_injuries
+    ) %>% lapply(htmltools::HTML),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      color = "#666",
+      fillOpacity = 0.9,
+      bringToFront = TRUE
+    )
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = hex_sf$count,
+    title = "Crash Count",
+    opacity = 0.7
+  ) %>%
+  setView(lng = -87.6505, lat = 41.9362, zoom = 14)
+
+cluster_map
+```
